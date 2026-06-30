@@ -177,7 +177,7 @@ abstract class PaperServerPlugin @Inject constructor(
 
         val (version, buildFromVersion) = parseVersionAndBuild(versionInput)
 
-        val buildNumber = when {
+        val requestedBuild = when {
             ext.build.isPresent -> {
                 val specifiedBuild = ext.build.get()
                 println("Using explicitly specified build: $specifiedBuild")
@@ -188,24 +188,22 @@ abstract class PaperServerPlugin @Inject constructor(
                 buildFromVersion
             }
             else -> {
-                val latestBuild = fetchLatestPaperMCBuild(projectName, version)
-                println("Using latest build: $latestBuild")
-                latestBuild.toString()
+                println("Using latest build")
+                null
             }
         }
 
-        val jarName = "$projectName-$version-$buildNumber.jar"
-        val jarFile = File(serverDir, jarName)
+        val build = resolvePaperMCBuild(projectName, version, requestedBuild)
+        val jarFile = File(serverDir, build.jarName)
 
         serverDir.mkdirs()
         if (!jarFile.exists()) {
-            cleanupOldServerJarsOfSameType(serverDir, ServerType.fromString(ext.serverType.get()), version, buildNumber)
-            val url = "https://api.papermc.io/v2/projects/$projectName/versions/$version/builds/$buildNumber/downloads/$jarName"
-            println("Downloading $projectName $version build $buildNumber …")
-            downloadFile(url, jarFile)
+            cleanupOldServerJarsOfSameType(serverDir, ServerType.fromString(ext.serverType.get()), version, build.number.toString())
+            println("Downloading $projectName $version build ${build.number} …")
+            downloadFile(build.url, jarFile)
             println("Saved → ${jarFile.relativeTo(project.projectDir)}")
         } else {
-            println("$projectName $version build $buildNumber already present.")
+            println("$projectName $version build ${build.number} already present.")
         }
     }
 
@@ -634,9 +632,13 @@ abstract class PaperServerPlugin @Inject constructor(
         }
     }
 
-    private fun fetchLatestPaperMCBuild(project: String, version: String): Int =
-        openUrlConnection("https://api.papermc.io/v2/projects/$project/versions/$version/").inputStream.use {
+    private data class PaperMCBuild(val number: Int, val jarName: String, val url: String)
+
+    private fun resolvePaperMCBuild(project: String, version: String, build: String?): PaperMCBuild =
+        openUrlConnection("https://fill.papermc.io/v3/projects/$project/versions/$version/builds/${build ?: "latest"}").inputStream.use {
             val json = gson.fromJson(InputStreamReader(it), Map::class.java)
-            (json["builds"] as List<Double>).last().toInt()
+            val downloads = json["downloads"] as Map<String, Map<String, Any>>
+            val app = downloads["server:default"] ?: downloads.values.first()
+            PaperMCBuild((json["id"] as Double).toInt(), app["name"] as String, app["url"] as String)
         }
 }
